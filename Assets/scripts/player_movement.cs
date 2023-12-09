@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
  
 public class PlayerController : MonoBehaviour
@@ -32,18 +31,18 @@ public class PlayerController : MonoBehaviour
     // Collision Checks
     Rigidbody2D rigidBody2D;
     BoxCollider2D playerCollider;
-    RaycastHit2D[] results = new RaycastHit2D[100];
 
     // Movement
-    Vector2 velocity = new Vector2(0, 0);
+    public static Vector2 velocity = new(0, 0);
     float horizontal = 0f;
     
     // Sliding
     bool sliding = false, slide = false;
+    float landTime = 0.1f, landTimer = 0f;
+    Vector2 landingVel = Vector2.zero;
 
     // Memory
     bool groundedLastFrame = false;
-    Vector2 prevVelocity = Vector2.zero;
 
     // Speedy Apex
     float antiGravAccelMult = 1.1f;
@@ -67,6 +66,7 @@ public class PlayerController : MonoBehaviour
     Vector2 wallJumpPower;
     float wallJumpAccelMult = 0.15f;
 
+
     // Debugging
     Vector3 lastPos = Vector3.zero;
     Color lineColor = Color.white;
@@ -74,7 +74,7 @@ public class PlayerController : MonoBehaviour
 
     // Scale Lerping
     Vector3 scaleModifier = new Vector3(1, 1, 1);
-    bool squishing = false;
+    bool scaleChangin = false;
     
     void Start()
     {
@@ -91,7 +91,7 @@ public class PlayerController : MonoBehaviour
         
         horizontal = Input.GetAxisRaw("Horizontal");
         groundedLastFrame = grounded;
-        grounded = isOnGround();
+        grounded = IsOnGround();
         walled = isOnWall();
 
         // Timers
@@ -114,7 +114,7 @@ public class PlayerController : MonoBehaviour
             jump = true;
         
         // Early Jump Release
-        jumpHeld = ((!grounded || jumpBufferTimer > 0f) && Input.GetButton("Jump"));
+        jumpHeld = (!grounded || jumpBufferTimer > 0f) && Input.GetButton("Jump");
 
         // play correct animations while moving...
         if (grounded && horizontal.Equals(0))
@@ -122,42 +122,45 @@ public class PlayerController : MonoBehaviour
         else if (grounded && (horizontal > 0 || horizontal < 0))
             GetComponent<Animator>().Play("Imbi-Walk");
         else if (!grounded && groundedLastFrame)
-            GetComponent<Animator>().Play("Imbi-Squeeze");
-        else if (velocity.y < -0.1f)
+            StartCoroutine(JumpAnim(transform.localScale));
+        else if (velocity.y < -0.1f && !walled)
             GetComponent<Animator>().Play("Imbi-Fall");
         if (grounded && !groundedLastFrame) {
-            StartCoroutine(Squash(transform.localScale));
+            StartCoroutine(LandAnim(transform.localScale));
         }
 
     }
  
     void FixedUpdate() {
+        if (grapple_script.isGrappling){ 
+            Gravity();
+            return;
+        }
         // ! Pre-Update
         velocity = rigidBody2D.velocity;
-
+        float horIncr = 0;
         // ! Horizontal movement
-        horizontal *= acceleration * 
+        horIncr = horizontal * acceleration * 10f *
                         ((wallJumpTimer > 0) ? wallJumpAccelMult : 1f) * 
                         ((Mathf.Abs(velocity.y) < 0.75f && Mathf.Abs(velocity.y) > 0.005f) ? antiGravAccelMult : 1f);
+        
+        if (Mathf.Abs(velocity.x) > speed) 
+            horIncr = -1* Mathf.Sign(velocity.x)*(Mathf.Abs(velocity.x)-speed+0.01f) * acceleration;
+        else if (Mathf.Abs(velocity.x +horizontal * Time.fixedDeltaTime) >= speed)
+            horIncr = (Mathf.Sign(horizontal) * (speed-0.01f) - velocity.x) / Time.fixedDeltaTime;
 
+        if (!sliding)   
+            velocity += horIncr * Time.fixedDeltaTime * Vector2.right;
+        else if (sliding && landTimer > 0f) 
+            velocity = landingVel.x / speed * landingVel.magnitude * Vector2.right;
+
+        Friction();
+
+        // Animations
         if (wallJumpTimer <= 0){
             if (horizontal > 0     && !isFacingRight)    flipSprite();
             else if(horizontal < 0 && isFacingRight)    flipSprite();
         }
-
-        if (!sliding){
-            velocity.x = Mathf.Clamp(velocity.x + horizontal * Time.fixedDeltaTime * 10f, -speed, speed);
-        }
-
-        Friction();
-
-        // Slide
-        if (slide || (sliding && grounded && !groundedLastFrame)) {
-            velocity = prevVelocity.magnitude * Vector2.right * (prevVelocity.x / speed);
-            slide = false;
-        }
-
-
         // ! Vertical Movement
 
         // Jumping
@@ -178,6 +181,7 @@ public class PlayerController : MonoBehaviour
 
         // Movement Clamping
         velocity.y = Mathf.Clamp(velocity.y, -terminalVelocity, terminalVelocity);
+        velocity.x = Mathf.Clamp(velocity.x, -speed*1.5f, speed*1.5f);
         velocity.x = Mathf.Abs(velocity.x) < 0.01f ? 0f : velocity.x;
         velocity.y = Mathf.Abs(velocity.y) < 0.01f ? 0f : velocity.y;
 
@@ -185,8 +189,6 @@ public class PlayerController : MonoBehaviour
         CornerCorrect(cornerCorrection);
 
         rigidBody2D.velocity = velocity;
-
-        prevVelocity = velocity;
 
         if (debug) {
             lineColor = velocity.y <= -terminalVelocity ? Color.red : lineColor;
@@ -196,18 +198,45 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    IEnumerator Squash(Vector3 startScale) {
-        if (!squishing) {
-            squishing = true; 
+    IEnumerator LandAnim(Vector3 startScale) {
+        yield return StartCoroutine(Squish(startScale, 0.25f));
+        // yield return StartCoroutine(Squeeze(startScale, 0.01f));
+    }
+
+    IEnumerator JumpAnim(Vector3 startScale) {
+        // yield return StartCoroutine(Squish(startScale, 0.1f));
+        // Can jump here
+        yield return StartCoroutine(Squeeze(startScale, 0.4f)); 
+    }
+
+    IEnumerator Squish(Vector3 startScale, float duration = 0.25f) {
+        if (!scaleChangin) {
+            scaleChangin = true; 
             scaleModifier = startScale;
-            yield return StartCoroutine(ScaleLerp(new Vector3(1.2f, 0.8f, 1.0f), 0.15f));
-            yield return StartCoroutine(ScaleLerp(scaleModifier, 0.025f));
-            yield return StartCoroutine(ScaleLerp(startScale, 0.1f));
+            yield return StartCoroutine(ScaleLerp(new Vector3(1.2f, 0.8f, 1.0f), 0.5f*duration));
+            yield return StartCoroutine(ScaleLerp(scaleModifier, 0.1f*duration));
+            yield return StartCoroutine(ScaleLerp(startScale, 0.4f*duration));
             if (isFacingRight != transform.localScale.x > 0)
                 transform.localScale = new Vector3(-transform.localScale.x,
                                                     transform.localScale.y,
                                                      transform.localScale.z);
-            squishing = false;
+            scaleChangin = false;
+        }
+    }
+
+    IEnumerator Squeeze(Vector3 startScale, float duration = 0.25f) {
+        if (!scaleChangin) {
+            scaleChangin = true; 
+            scaleModifier = startScale;
+
+            yield return StartCoroutine(ScaleLerp(new Vector3(0.8f, 1.2f, 1.0f), 0.5f*duration));
+            yield return StartCoroutine(ScaleLerp(scaleModifier, 0.1f*duration));
+            yield return StartCoroutine(ScaleLerp(startScale, 0.4f*duration));
+            if (isFacingRight != transform.localScale.x > 0)
+                transform.localScale = new Vector3(-transform.localScale.x,
+                                                    transform.localScale.y,
+                                                     transform.localScale.z);
+            scaleChangin = false;
         }
     }
 
@@ -254,6 +283,10 @@ public class PlayerController : MonoBehaviour
 
         if (wallJumpTimer > 0f)    wallJumpTimer -= Time.deltaTime;
         else if (wallJumpTimer <= 0f || grounded)   wallJumpTimer = 0f;
+
+        if (grounded && !groundedLastFrame) {landTimer = landTime;  landingVel = velocity;}
+        else if (landTimer > 0f)    landTimer -= Time.deltaTime;
+        else if (landTimer <= 0f)   landTimer = 0f;
         
     }
 
@@ -291,15 +324,15 @@ public class PlayerController : MonoBehaviour
         }
 
         // Gravity...
-        velocity += Vector2.down * SystemConstants.Gravity * gMult * Time.fixedDeltaTime;
+        velocity += gMult * SystemConstants.Gravity * Time.fixedDeltaTime * Vector2.down;
     }
 
     // Friction
     private void Friction() {
-        if      (horizontal == 0f && grounded)  velocity.x *= (1-groundedFriction);
+        if      (horizontal == 0f && grounded)  velocity.x *= 1-groundedFriction;
         else if (horizontal == 0f && !grounded 
-                 && (wallJumpTimer <= 0f)) velocity.x *= (1-airFriction);
-        else if (sliding)                       velocity.x *= (1-slideFriction); 
+                 && (wallJumpTimer <= 0f)) velocity.x *= 1-airFriction;
+        else if (sliding)                       velocity.x *= 1-slideFriction; 
     }
 
     // Corner Correction
@@ -312,10 +345,10 @@ public class PlayerController : MonoBehaviour
     private void attempt_correction_y(int pixels) {
         var up = Vector2.up * velocity * Time.fixedDeltaTime;
 
-        if (velocity.y > 0 && testMove(up)) {
+        if (velocity.y > 0 && TestMove(up)) {
             for (float j = -1.0f; j <= 1.0f; j += 2.0f) {
                 for (int i = 1; i <= pixels; i++) {
-                    if (!testMove(new Vector2(i*j/100, 0), up)) {
+                    if (!TestMove(new Vector2(i*j/100, 0), up)) {
                         transform.position += new Vector3(i*j/100, 0);
                         if (velocity.x < 0) velocity.x = 0;
                         return;
@@ -330,9 +363,9 @@ public class PlayerController : MonoBehaviour
     private void attempt_correction_x(int pixels) {
         var hor = Vector2.right * velocity * Time.fixedDeltaTime;
 
-        if (testMove(hor)) {
+        if (TestMove(hor)) {
             for (float i = 1; i <= pixels; i++) {
-                if (!testMove(new Vector2(0, i/100), hor)) {
+                if (!TestMove(new Vector2(0, i/100), hor)) {
                     transform.position += new Vector3(0,i/100);
                     if (velocity.y < 0) velocity.y = 0;
                     return;
@@ -342,59 +375,59 @@ public class PlayerController : MonoBehaviour
     }
 
     // Test move
-    private bool testMove(Vector2 t, Vector2 dir) {
+    private bool TestMove(Vector2 t, Vector2 dir) {
         // Debugging
         if (debug) {
-            Debug.DrawRay((Vector2) (playerCollider.bounds.center) + t + 
+            Debug.DrawRay((Vector2) playerCollider.bounds.center + t + 
                                     playerCollider.bounds.extents * (dir.normalized + (dir.x == 0 ? Vector2.left: Vector2.up)),
                                     dir,
                                     Color.red,
                                     1.0f);
-            Debug.DrawRay((Vector2) (playerCollider.bounds.center) + t + 
+            Debug.DrawRay((Vector2) playerCollider.bounds.center + t + 
                                     playerCollider.bounds.extents * (dir.normalized + (dir.x == 0 ? Vector2.right: Vector2.down)),
                                     dir,
                                     Color.red,
                                     1.0f);
         }
         // Check if left side collides
-        return !(Physics2D.Raycast((Vector2) (playerCollider.bounds.center) + t + 
+        return !(Physics2D.Raycast((Vector2) playerCollider.bounds.center + t + 
                                 playerCollider.bounds.extents * (dir.normalized + (dir.x == 0 ? Vector2.left: Vector2.up)),
                                         dir,
                                         0.08f, 
                                         groundLayer).collider == null
                 &&
         //Center
-                Physics2D.Raycast((Vector2) (playerCollider.bounds.center) + t + 
-                                playerCollider.bounds.extents * (dir.normalized),
+                Physics2D.Raycast((Vector2) playerCollider.bounds.center + t + 
+                                playerCollider.bounds.extents * dir.normalized,
                                         dir,
                                         0.08f, 
                                         groundLayer).collider == null
                 &&
         // Check if right side collides
-                Physics2D.Raycast((Vector2) (playerCollider.bounds.center) + t + 
+                Physics2D.Raycast((Vector2) playerCollider.bounds.center + t + 
                                 playerCollider.bounds.extents * (dir.normalized + (dir.x == 0 ? Vector2.right: Vector2.down)),
                                         dir,
                                         0.08f, 
                                         groundLayer).collider == null);
     }
 
-    private bool testMove(Vector2 dir) {
+    private bool TestMove(Vector2 dir) {
         // Check if left side collides
-        return !(Physics2D.Raycast((Vector2) (playerCollider.bounds.center) + 
+        return !(Physics2D.Raycast((Vector2) playerCollider.bounds.center + 
                                 playerCollider.bounds.extents * (dir.normalized + (dir.x == 0 ? Vector2.left: Vector2.up)),
                                         dir,
                                         0.08f, 
                                         groundLayer).collider == null
                 &&
         //Center
-                Physics2D.Raycast((Vector2) (playerCollider.bounds.center) + 
-                                playerCollider.bounds.extents * (dir.normalized),
+                Physics2D.Raycast((Vector2) playerCollider.bounds.center + 
+                                playerCollider.bounds.extents * dir.normalized,
                                         dir,
                                         0.08f, 
                                         groundLayer).collider == null
                 &&
         // Check if right side collides
-                Physics2D.Raycast((Vector2) (playerCollider.bounds.center)  + 
+                Physics2D.Raycast((Vector2) playerCollider.bounds.center  + 
                                 playerCollider.bounds.extents * (dir.normalized + (dir.x == 0 ? Vector2.right: Vector2.down)),
                                         dir,
                                         0.08f, 
@@ -402,7 +435,7 @@ public class PlayerController : MonoBehaviour
     }
 
     // Collision Checks
-    private bool isOnGround() {
+    private bool IsOnGround() {
         return groundCheck.IsTouchingLayers(groundLayer);
     }
 
