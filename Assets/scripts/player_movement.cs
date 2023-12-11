@@ -92,7 +92,7 @@ public class PlayerController : MonoBehaviour
         horizontal = Input.GetAxisRaw("Horizontal");
         groundedLastFrame = grounded;
         grounded = IsOnGround();
-        walled = isOnWall();
+        walled = IsOnWall();
 
         // Timers
         TimerUpdate();
@@ -138,7 +138,7 @@ public class PlayerController : MonoBehaviour
         }
         // ! Pre-Update
         velocity = rigidBody2D.velocity;
-        float horIncr = 0;
+        float horIncr;
         // ! Horizontal movement
         horIncr = horizontal * acceleration * 10f *
                         ((wallJumpTimer > 0) ? wallJumpAccelMult : 1f) * 
@@ -146,8 +146,8 @@ public class PlayerController : MonoBehaviour
         
         if (Mathf.Abs(velocity.x) > speed) 
             horIncr = -1* Mathf.Sign(velocity.x)*(Mathf.Abs(velocity.x)-speed+0.01f) * acceleration;
-        else if (Mathf.Abs(velocity.x +horizontal * Time.fixedDeltaTime) >= speed)
-            horIncr = (Mathf.Sign(horizontal) * (speed-0.01f) - velocity.x) / Time.fixedDeltaTime;
+        else if (Mathf.Abs(velocity.x + horizontal * Time.fixedDeltaTime) >= speed)
+            horIncr = -1* Mathf.Sign(velocity.x)*(Mathf.Abs(velocity.x)-speed+0.01f) * acceleration*3f;
 
         if (!sliding)   
             velocity += horIncr * Time.fixedDeltaTime * Vector2.right;
@@ -158,8 +158,8 @@ public class PlayerController : MonoBehaviour
 
         // Animations
         if (wallJumpTimer <= 0){
-            if (horizontal > 0     && !isFacingRight)    flipSprite();
-            else if(horizontal < 0 && isFacingRight)    flipSprite();
+            if (horizontal > 0     && !isFacingRight)    FlipSprite();
+            else if(horizontal < 0 && isFacingRight)    FlipSprite();
         }
         // ! Vertical Movement
 
@@ -263,7 +263,7 @@ public class PlayerController : MonoBehaviour
     }
 
     // Flip Sprite
-    private void flipSprite() {
+    private void FlipSprite() {
         isFacingRight = !isFacingRight;
  
         Vector3 transformScale = transform.localScale;
@@ -295,7 +295,7 @@ public class PlayerController : MonoBehaviour
     private void WallSlide() {
         if (wallSlide) {
             velocity.y = velocity.y > 0.05f ? velocity.y * 0.9f : velocity.y;
-            velocity.y = Mathf.Clamp(velocity.y, -2f, terminalVelocity);
+            velocity.y = Mathf.Clamp(velocity.y, -1.5f, terminalVelocity);
         }
 
         if (wallJump) {
@@ -305,7 +305,7 @@ public class PlayerController : MonoBehaviour
                 jumpBufferTimer = 0f;
                 coyoteTimer = 0f;
                 wallJumpTimer = wallJumpTime;
-                flipSprite();
+                FlipSprite();
         }
     }
 
@@ -439,7 +439,7 @@ public class PlayerController : MonoBehaviour
         return groundCheck.IsTouchingLayers(groundLayer);
     }
 
-    private bool isOnWall() {
+    private bool IsOnWall() {
         return wallCheck.IsTouchingLayers(groundLayer);
     }
 
